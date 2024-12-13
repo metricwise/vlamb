@@ -1,0 +1,30 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9"]
+        vtiger-version: ["8.2.0"]
+    services:
+      vtiger:
+        image: vtigercrm/vtigercrm-${{ matrix.vtiger-version }}
+        env:
+          mysql_user: admin
+          mysql_pass: admin
+        ports:
+          - "80:80"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest
+        env:
+          VTIGER_HOST: http://localhost
+          VTIGER_USER: admin
+          VTIGER_PASS: admin
