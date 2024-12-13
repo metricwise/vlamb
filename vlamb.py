@@ -1,10 +1,58 @@
+import functools
 import hashlib
+import http
 import json
 import logging
+import os
 import urllib.parse
 import urllib.request
 
+import boto3
+
 _logger = logging.getLogger(__name__)
+
+ssm = None
+
+
+# https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html#api-gateway-simple-proxy-for-lambda-output-format
+def make_response(func):
+    @functools.wraps(func)
+    def wrapper(event, context):
+        _logger.debug("request %s", event)
+        try:
+            message = func(event, context) or http.HTTPStatus.OK.phrase
+            code = http.HTTPStatus.OK.value
+        except VtapiError as e:
+            _logger.error(e.message)
+            message = e.message
+            code = e.status
+        except Exception as e:
+            _logger.exception(str(e))
+            message = http.HTTPStatus.INTERNAL_SERVER_ERROR.phrase
+            code = http.HTTPStatus.INTERNAL_SERVER_ERROR.value
+        response = {
+            'body': json.dumps({'message': message}),
+            'statusCode': code,
+        }
+        _logger.debug("response %s", response)
+        return response
+    return wrapper
+
+
+def login():
+    global ssm
+    host = os.environ['VTIGER_HOST']
+    password = os.environ['VTIGER_PASS']
+    user = os.environ['VTIGER_USER']
+
+    if password.startswith('/') or password.startswith('arn:'):
+        if not ssm:
+            ssm = boto3.client('ssm')
+        password = ssm.get_parameter(Name=password, WithDecryption=True)['Parameter']['Value']
+
+    api = Vtapi(host)
+    api.login(user, password)
+    return api
 
 
 class Vtapi:
