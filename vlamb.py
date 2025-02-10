@@ -11,7 +11,8 @@ import boto3
 
 _logger = logging.getLogger(__name__)
 
-ssm = None
+if os.environ['VTIGER_PASS'].startswith('/') or os.environ['VTIGER_PASS'].startswith('arn:'):
+    os.environ['VTIGER_PASS'] = boto3.client('ssm').get_parameter(Name=os.environ['VTIGER_PASS'], WithDecryption=True)['Parameter']['Value']
 
 
 # https://docs.aws.amazon.com/apigateway/latest/developerguide/set-up-lambda-proxy-integrations.html#api-gateway-simple-proxy-for-lambda-output-format
@@ -40,19 +41,28 @@ def make_response(func):
 
 
 def login():
-    global ssm
-    host = os.environ['VTIGER_HOST']
-    password = os.environ['VTIGER_PASS']
-    user = os.environ['VTIGER_USER']
-
-    if password.startswith('/') or password.startswith('arn:'):
-        if not ssm:
-            ssm = boto3.client('ssm')
-        password = ssm.get_parameter(Name=password, WithDecryption=True)['Parameter']['Value']
-
-    api = Vtapi(host)
-    api.login(user, password)
+    api = Vtapi(os.environ['VTIGER_HOST'])
+    api.login(os.environ['VTIGER_USER'], os.environ['VTIGER_PASS'])
     return api
+
+
+# https://docs.aws.amazon.com/lambda/latest/dg/example_serverless_SQS_Lambda_section.html
+# https://docs.aws.amazon.com/lambda/latest/dg/example_serverless_SQS_Lambda_batch_item_failures_section.html
+def wraps_sqs(func):
+    @functools.wraps(func)
+    def wrapper(event, context):
+        with login() as vtapi:
+            batch_item_failures = []
+            for record in event['Records']:
+                try:
+                    func(record, context, vtapi)
+                except Exception as e:
+                    _logger.exception("%s", e)
+                    batch_item_failures.append({'itemIdentifier': record['messageId']})
+            response = {'batchItemFailures': batch_item_failures}
+            _logger.debug("response %s", response)
+            return response
+    return wrapper
 
 
 class Vtapi:
